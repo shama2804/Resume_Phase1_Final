@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>JD Builder</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #f1f3f6;
+      padding: 30px;
+    }
+
+    form {
+      max-width: 700px;
+      margin: auto;
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    }
+
+    h2 {
+      text-align: center;
+      margin-bottom: 25px;
+      color: #333;
+    }
+
+    label {
+      font-weight: 500;
+      display: block;
+      margin: 15px 0 5px;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    textarea,
+    select {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+
+    textarea {
+      resize: vertical;
+    }
+
+    .checkbox-group {
+      margin: 15px 0 0;
+    }
+
+    input[type="checkbox"] {
+      margin-right: 8px;
+    }
+
+    input[type="submit"] {
+      background-color: #007bff;
+      color: white;
+      border: none;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 25px;
+    }
+
+    input[type="submit"]:hover {
+      background-color: #0056b3;
+    }
+
+    .optional-block {
+      padding: 15px;
+      margin-top: 20px;
+      background: #f8f9fa;
+      border-left: 4px solid #007bff;
+      border-radius: 6px;
+    }
+
+    .hidden-section {
+      display: none;
+    }
+  </style>
+
+  <script>
+    function toggleField(checkbox, fieldId) {
+      var field = document.getElementById(fieldId);
+      field.style.display = checkbox.checked ? "block" : "none";
+    }
+  </script>
+</head>
+<body>
+  <form action="/jd/submit_jd" method="POST">
+    <h2>Job Description Builder</h2>
+
+    <!-- Basic Info -->
+    <label>Job Title:</label>
+    <input type="text" name="job_title" required>
+
+    <label>Employment Type:</label>
+    <select name="employment_type" required>
+      <option value="">Select</option>
+      <option value="Full-time">Full-time</option>
+      <option value="Part-time">Part-time</option>
+      <option value="Internship">Internship</option>
+      <option value="Contract">Contract</option>
+    </select>
+
+    <label>Company Name:</label>
+    <input type="text" name="company_name" required>
+
+    <label>Qualification:</label>
+    <input type="text" name="qualification">
+
+    <label>Location:</label>
+    <input type="text" name="location">
+
+    <label>Work Mode:</label>
+    <select name="work_mode" required>
+      <option value="">Select</option>
+      <option value="On-site">On-site</option>
+      <option value="Remote">Remote</option>
+      <option value="Hybrid">Hybrid</option>
+    </select>
+
+    <label>About the Company:</label>
+    <textarea name="about_company" rows="3"></textarea>
+
+    <label>Job Summary:</label>
+    <textarea name="job_summary" rows="3"></textarea>
+
+    <label>Responsibilities (comma separated):</label>
+    <textarea name="responsibilities" rows="3"></textarea>
+
+    <label>Experience & Required Skills (comma separated):</label>
+    <textarea name="experience_skills" rows="2"></textarea>
+
+    <label>Nice to Have Skills:</label>
+    <textarea name="nice_to_have_skills" rows="2"></textarea>
+
+    <label>What Do You Offer (Perks, Benefits):</label>
+    <textarea name="what_to_offer" rows="2"></textarea>
+
+    <!-- Optional Section -->
+    <div class="optional-block">
+      <strong>Optional JD Details</strong><br><br>
+
+      <!-- Reporting Size -->
+      <div class="checkbox-group">
+        <input type="checkbox" name="show_reporting_size" onchange="toggleField(this, 'reporting_size_field')">
+        Show Reporting Size in JD
+      </div>
+      <div id="reporting_size_field" class="hidden-section">
+        <label>Reporting Size:</label>
+        <input type="text" name="reporting_size">
+      </div>
+
+      <!-- Stipend -->
+      <div class="checkbox-group">
+        <input type="checkbox" name="show_stipend" onchange="toggleField(this, 'stipend_field')">
+        Show Stipend / Salary in JD
+      </div>
+      <div id="stipend_field" class="hidden-section">
+        <label>Stipend / Salary:</label>
+        <input type="text" name="stipend">
+      </div>
+
+      <!-- No. of Openings -->
+      <div class="checkbox-group">
+        <input type="checkbox" name="show_openings" onchange="toggleField(this, 'openings_field')">
+        Show No. of Openings in JD
+      </div>
+      <div id="openings_field" class="hidden-section">
+        <label>No. of Openings:</label>
+        <input type="number" name="no_of_openings">
+      </div>
+
+      <!-- Certifications Section -->
+<!-- Certifications Section -->
+<div class="checkbox-group">
+  <input type="checkbox" name="show_certification">
+  Mention in JD that certification is appreciated
+</div>
+
+    <!-- Internal Fields -->
+    <label>Gender Preference (internal only):</label>
+    <select name="gender">
+      <option value="">Any</option>
+      <option value="Male">Male</option>
+      <option value="Female">Female</option>
+      <option value="Other">Other</option>
+    </select>
+
+    <label>No. of Candidates to Interview (internal only):</label>
+    <input type="number" name="no_of_candidates">
+<label>Preferred Candidate Type (internal only):</label>
+<div class="checkbox-group">
+  <input type="checkbox" name="fresher_allowed" id="fresher_allowed">
+  <label for="fresher_allowed">Fresher (0–2 years)</label><br>
+
+  <input type="checkbox" name="experienced_allowed" id="experienced_allowed">
+  <label for="experienced_allowed">Experienced (2+ years)</label>
+</div>
+
+
+    <label>
+  <input type="checkbox" name="certification_appreciated">
+  Appreciate relevant certifications
+</label>
+
+
+    <div class="checkbox-group">
+      <input type="checkbox" name="github_required">
+      GitHub Profile Required
+    </div>
+
+    <input type="submit" value="Generate JD">
+  </form>
+</body>
+</html>

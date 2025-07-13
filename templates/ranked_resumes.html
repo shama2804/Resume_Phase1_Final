@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Ranked Resumes</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f4f4f4;
+      padding: 30px;
+    }
+    h2 {
+      margin-bottom: 20px;
+      color: #333;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    }
+    th, td {
+      padding: 12px 15px;
+      border-bottom: 1px solid #ccc;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background-color: #333;
+      color: white;
+    }
+    tr:hover {
+      background-color: #f0f0f0;
+    }
+    .score {
+      font-weight: bold;
+      color: #2e8b57;
+    }
+    .resume-link {
+      display: inline-block;
+      padding: 6px 12px;
+      background-color: #4CAF50;
+      color: white;
+      text-decoration: none;
+      border-radius: 4px;
+      font-size: 0.9em;
+      transition: background-color 0.3s;
+    }
+    .resume-link:hover {
+      background-color: #3e8e41;
+    }
+    .highlight-item {
+      display: inline-block;
+      padding: 4px 8px;
+      margin: 2px;
+      font-size: 0.85em;
+      border-radius: 6px;
+      background-color: #eee;
+    }
+    .skill-match {
+      background-color: #e0f7fa;
+      color: #00796b;
+    }
+    .project-match {
+      background-color: #fff3e0;
+      color: #ef6c00;
+    }
+    .education-match {
+      background-color: #ede7f6;
+      color: #5e35b1;
+    }
+    .role-alignment {
+      background-color: #e8f5e9;
+      color: #2e7d32;
+    }
+    .bonus {
+      background-color: #f3e5f5;
+      color: #8e24aa;
+    }
+    .reputed-college {
+      background-color: #fbe9e7;
+      color: #d84315;
+    }
+  </style>
+</head>
+<body>
+  <h2>🏆 Final Ranked Candidates for JD ID: {{ jd_id }}</h2>
+  
+  {% if ranked_resumes %}
+    <table>
+      <thead>
+        <tr>
+          <th>Rank</th>
+          <th>Candidate Name</th>
+          <th>Resume</th>  <!-- New column -->
+          <th>Score</th>
+          <th>Key Highlights</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for candidate in ranked_resumes %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td>
+            {{ candidate.name if candidate.name else candidate.personal_details.name if candidate.personal_details and candidate.personal_details.name else "Unnamed" }}
+          </td>
+          <td>
+            {% if candidate.resume_filepath %}
+              {% set filename = candidate.resume_filepath.split('/')[-1] %}
+              <a href="/uploads/{{ filename }}" class="resume-link" target="_blank">View Resume</a>
+            {% else %}
+              <span>No resume</span>
+            {% endif %}
+          </td>
+          <td class="score">
+            {{ "%.2f"|format(candidate.final_score) }}
+          </td>
+          <td>
+            <div class="d-flex flex-wrap gap-1">
+              {% for highlight in candidate.highlights %}
+                {% if "Skills" in highlight %}
+                  <span class="highlight-item skill-match">{{ highlight }}</span>
+                {% elif "Sections" in highlight %}
+                  <span class="highlight-item project-match">{{ highlight }}</span>
+                {% elif "Education" in highlight %}
+                  <span class="highlight-item education-match">{{ highlight }}</span>
+                {% elif "Projects" in highlight %}
+                  <span class="highlight-item role-alignment">{{ highlight }}</span>
+                {% elif "Cert" in highlight %}
+                  <span class="highlight-item bonus">{{ highlight }}</span>
+                {% elif "College" in highlight %}
+                  <span class="highlight-item reputed-college">{{ highlight }}</span>
+                {% elif "Exp" in highlight %}
+                  <span class="highlight-item bonus">{{ highlight }}</span>
+                {% else %}
+                  <span class="highlight-item">{{ highlight }}</span>
+                {% endif %}
+              {% endfor %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>No candidates qualified for this JD.</p>
+  {% endif %}
+</body>
+</html>

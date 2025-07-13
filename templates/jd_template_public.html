@@ -1,0 +1,48 @@
+<!-- templates/jd_template_public.html -->
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Public JD</title></head>
+<body>
+<h2>{{ jd.job_title }} ({{ jd.employment_type }})</h2>
+<p><strong>Company:</strong> {{ jd.company_name }}</p>
+<p><strong>Location:</strong> {{ jd.location }} ({{ jd.work_mode }})</p>
+<p><strong>Qualification:</strong> {{ jd.qualification }}</p>
+
+<p><strong>About the Company:</strong> {{ jd.about_company }}</p>
+<p><strong>Job Summary:</strong> {{ jd.job_summary }}</p>
+<p><strong>Responsibilities:</strong> {{ jd.responsibilities }}</p>
+<p><strong>Experience & Skills:</strong> {{ jd.experience_skills }}</p>
+<p><strong>Nice to Have:</strong> {{ jd.nice_to_have_skills }}</p>
+<p><strong>What We Offer:</strong> {{ jd.what_to_offer }}</p>
+
+{% if jd.show_reporting_size %}<p><strong>Reporting Size:</strong> {{ jd.reporting_size }}</p>{% endif %}
+{% if jd.show_stipend %}<p><strong>Stipend:</strong> {{ jd.stipend }}</p>{% endif %}
+{% if jd.show_openings %}<p><strong>No. of Openings:</strong> {{ jd.no_of_openings }}</p>{% endif %}
+{% if jd.show_certification %}<p><strong>Certification is Appreciated</strong></p>{% endif %}
+
+
+<p style="text-align: center; margin-top: 30px;">
+  <a href="http://localhost:5000/apply/{{ jd['_id'] }}" 
+     style="background-color: #007bff; color: white; padding: 10px 20px;
+            border-radius: 5px; text-decoration: none; font-weight: bold;">
+     APPLY NOW
+  </a>
+</p>
+
+<p style="text-align: center; font-size: 14px; color: #333; margin-top: 10px;">
+  or copy this link:<br>
+  <!-- Change the copy link -->
+<code style="background: #f1f1f1; padding: 5px 10px; border-radius: 4px;">
+  {{ url_for('upload_for_jd', jd_id=jd['_id'], _external=True) }}
+</code>
+</p>
+<p style="text-align: center; margin-top: 30px;">
+  <a href="http://localhost:5000/jd/pdfs/JD_{{ jd['_id'] }}_public.pdf" 
+     style="background-color: #007bff; color: white; padding: 10px 20px;
+            border-radius: 5px; text-decoration: none; font-weight: bold;">
+     DOWNLOAD PUBLIC JD
+  </a>
+</p>
+
+</body>
+</html>

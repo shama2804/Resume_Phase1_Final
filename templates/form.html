@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Job Application Form</title>
+  <style>
+  .tags-input {
+    display: flex;
+    flex-wrap: wrap;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #fff;
+    min-height: 50px;
+  }
+  .tag {
+    background: #e0f7fa;
+    color: #00796b;
+    border-radius: 4px;
+    padding: 4px 8px;
+    margin: 4px;
+    display: flex;
+    align-items: center;
+  }
+  .tag-input {
+    border: none;
+    background: transparent;
+    font-size: 14px;
+    max-width: 120px;
+  }
+  .tag-input:focus {
+    outline: none;
+  }
+  .tags-input input[type="text"] {
+    border: none;
+    flex: 1;
+    padding: 4px;
+    font-size: 14px;
+  }
+  .tags-input input[type="text"]:focus {
+    outline: none;
+  }
+    body {
+      font-family: Arial, sans-serif;
+      margin: 40px auto;
+      max-width: 900px;
+      padding: 0 20px;
+      background: #f9f9f9;
+    }
+    h1, h2 {
+      color: #333;
+    }
+    input, textarea {
+      width: 100%;
+      padding: 10px;
+      margin-top: 4px;
+      margin-bottom: 15px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    label {
+      font-weight: bold;
+      display: block;
+    }
+    .section {
+      background: #fff;
+      padding: 20px;
+      border-radius: 6px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+      margin-bottom: 30px;
+    }
+    button {
+      padding: 10px 20px;
+      background-color: #2e7d32;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #1b5e20;
+    }
+    .add-btn {
+      background-color: #1976d2;
+      margin-top: 10px;
+    }
+    .add-btn:hover {
+      background-color: #125ea3;
+    }
+    .delete-btn {
+      background-color: #c62828;
+      color: white;
+      margin-top: 10px;
+      padding: 6px 12px;
+      border: none;
+      border-radius: 4px;
+    }
+    .delete-btn:hover {
+      background-color: #b71c1c;
+    }
+  </style>
+</head>
+<body>
+  <h1>Job Application Form</h1>
+
+  <!-- Resume Upload -->
+  <div class="section">
+    <form method="POST" action="/upload" enctype="multipart/form-data">
+      <input type="hidden" name="jd_id" value="{{ jd_id }}"> 
+      <label>Upload Resume (PDF)</label>
+      <input type="file" name="resume" accept=".pdf,.doc,.docx" required>
+      <button type="submit">Auto-Fill from Resume</button>
+    </form>
+  </div>
+
+  {% if jd_title %}
+  <div class="section">
+    <p style="font-size: 18px; font-weight: bold; color: #2e7d32;">
+       You're applying for: <span style="color: #000">{{ jd_title }}</span>
+    </p>
+    {% if jd_company %}
+      <p><strong> Company:</strong> {{ jd_company }}</p>
+    {% endif %}
+    {% if jd_location %}
+      <p><strong> Location:</strong> {{ jd_location }}</p>
+    {% endif %}
+    <a href="/jd/{{ jd_id }}" target="_blank"> View JD</a>
+  </div>
+  {% endif %}
+
+  <!-- Main Application Form -->
+  <form method="POST" action="/submit">
+    <input type="hidden" name="resume_filename" value="{{ resume_filename }}">
+    <input type="hidden" name="jd_id" value="{{ jd_id }}">
+
+    <!-- 1. Personal Details -->
+    <div class="section">
+      <h2>1. Personal Details</h2>
+      <label>Full Name</label>
+      <input name="name" value="{{ prefill.get('personal_details', {}).get('name', '') }}">
+      <label>Email Address</label>
+      <input name="email" value="{{ prefill.get('personal_details', {}).get('email', '') }}">
+      <label>Phone Number</label>
+      <input name="phone" value="{{ prefill.get('personal_details', {}).get('phone', '') }}">
+    </div>
+
+    <!-- 2. Education -->
+    <div class="section">
+      <h2>2. Education</h2>
+      {% set education = prefill.get('education', []) %}
+      {% set edu = education[0] if education else {} %}
+      <label>Degree</label>
+      <input name="degree" value="{{ edu.get('degree', '') }}">
+      <label>College</label>
+      <input name="college" value="{{ edu.get('college', '') }}">
+      <label>Graduation Year</label>
+      <input name="graduation" value="{{ edu.get('graduation', '') }}">
+      <label>CGPA</label>
+      <input name="cgpa" value="{{ edu.get('cgpa', '') }}">
+    </div>
+
+    <!-- 3. Work Experience -->
+    <div class="section">
+      <h2>3. Work Experience / Internships</h2>
+      {% set exp = prefill.get('experience', {}) %}
+      <div class="experience-block">
+        <label>Job Title / Internship Role</label>
+        <input name="experience[0][job_title]" value="{{ exp.get('job_title', '') }}">
+        <label>Company / Organization Name</label>
+        <input name="experience[0][current_company]" value="{{ exp.get('current_company', '') }}">
+        <label>Employment Duration</label>
+        <input name="experience[0][employment_duration]" value="{{ exp.get('employment_duration', '') }}">
+        <label>Responsibilities / Key Contributions</label>
+        <textarea name="experience[0][job_responsibilities]">{{ exp.get('job_responsibilities', '') }}</textarea>
+      </div>
+
+      <!-- Placeholder for dynamic experience -->
+      <div id="extra-experiences"></div>
+      <button type="button" class="add-btn" onclick="addExperience()">+ Add Experience</button>
+    </div>
+
+    <!-- 4. Skills -->
+    <div class="section">
+      <h2>4. Skills</h2>
+      <label>Skills</label>
+      <div id="skill-tags" class="tags-input" onclick="focusInput()">
+        {% for skill in prefill.get('skills', []) %}
+          <span class="tag">
+            <input value="{{ skill }}" name="skills[]" class="tag-input" />
+            <button type="button" onclick="this.parentElement.remove()">×</button>
+          </span>
+        {% endfor %}
+        <input type="text" id="skillInput" placeholder="Type and press Enter" onkeydown="handleKey(event)">
+      </div>
+    </div>
+
+    <!-- 5. Projects -->
+    <div class="section">
+      <h2>5. Projects</h2>
+      {% set projects = prefill.get('projects', []) %}
+      <input type="hidden" id="project-count" value="{{ projects|length if projects else 1 }}">
+
+      {% for proj in projects %}
+        {% set i = loop.index0 %}
+        <div class="project-block">
+          <label>Project Title</label>
+          <input name="projects[{{ i }}][title]" value="{{ proj.get('title', '') }}">
+          <label>Tech Stack</label>
+          <input name="projects[{{ i }}][tech_stack]" value="{{ proj.get('tech_stack', '') }}">
+          <label>Description</label>
+          <textarea name="projects[{{ i }}][description]">{{ proj.get('description', '') }}</textarea>
+          <label>Duration (From – To)</label>
+          <input name="projects[{{ i }}][duration]" value="{{ proj.get('duration', '') }}">
+        </div>
+      {% endfor %}
+
+      <!-- Placeholder for new projects -->
+      <div id="extra-projects"></div>
+      <button type="button" class="add-btn" onclick="addProject()">+ Add Project</button>
+    </div>
+
+    <!-- 6. Links -->
+    <div class="section">
+      <h2>6. Links</h2>
+      <label>LinkedIn</label>
+      <input name="linkedin" value="{{ prefill.get('links', {}).get('linkedin', '') }}">
+      <label>Website / Portfolio</label>
+      <input name="website" value="{{ prefill.get('links', {}).get('website', '') }}">
+    </div>
+
+    <!-- Submit -->
+    <div class="section">
+      <button type="submit">Submit Application</button>
+    </div>
+  </form>
+
+  <!-- JS -->
+  <script>
+  let expCount = 1;
+  let projectCount = parseInt(document.getElementById('project-count')?.value || "1");
+
+  function addExperience() {
+    const container = document.getElementById("extra-experiences");
+    const div = document.createElement("div");
+    div.className = "experience-block";
+    div.innerHTML = `
+      <label>Job Title / Internship Role</label>
+      <input name="experience[${expCount}][job_title]">
+      <label>Company / Organization Name</label>
+      <input name="experience[${expCount}][current_company]">
+      <label>Employment Duration</label>
+      <input name="experience[${expCount}][employment_duration]">
+      <label>Responsibilities / Key Contributions</label>
+      <textarea name="experience[${expCount}][job_responsibilities]"></textarea>
+      <button type="button" class="delete-btn" onclick="this.parentElement.remove()"> Delete</button>
+      <hr>
+    `;
+    container.appendChild(div);
+    expCount++;
+  }
+
+  function addProject() {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'project-block';
+    wrapper.innerHTML = `
+      <label>Project Title</label>
+      <input name="projects[${projectCount}][title]">
+      <label>Tech Stack</label>
+      <input name="projects[${projectCount}][tech_stack]">
+      <label>Description</label>
+      <textarea name="projects[${projectCount}][description]"></textarea>
+      <label>Duration (From – To)</label>
+      <input name="projects[${projectCount}][duration]">
+      <button type="button" onclick="this.parentElement.remove()">🗑️ Delete</button>
+      <hr>
+    `;
+    document.getElementById('extra-projects').appendChild(wrapper);
+    projectCount++;
+  }
+
+  function focusInput() {
+    document.getElementById("skillInput").focus();
+  }
+
+  function handleKey(e) {
+    const input = e.target;
+    if (e.key === "Enter" && input.value.trim() !== "") {
+      e.preventDefault();
+      const value = input.value.trim();
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.innerHTML = `
+        <input value="${value}" name="skills[]" class="tag-input" />
+        <button type="button" onclick="this.parentElement.remove()">×</button>
+      `;
+      document.getElementById("skill-tags").insertBefore(tag, input);
+      input.value = "";
+    }
+  }
+  </script>
+</body>
+</html>
