@@ -1,29 +1,55 @@
+# ranking_logic.py (optimized and improved)
 import os
 import re
 import fitz
 import nltk
 import datetime
+import time
+import pickle
 from collections import defaultdict
 from sentence_transformers import SentenceTransformer, util
 import difflib
+import numpy as np
+from functools import lru_cache
+
+# Verbose logging control - set to False for production
+VERBOSE = True
+
 nltk.download('punkt', quiet=True)
 bi_encoder = SentenceTransformer('all-MiniLM-L6-v2')
+
+# Enhanced section definitions with synonyms
 GENERIC_SECTIONS = {
-    'skills': ['skills', 'technical skills', 'competencies', 'proficiencies', 'tools', 'technologies', 'languages', 'frameworks'],
-    'education': ['education', 'academic background', 'qualifications', 'degrees', 'certifications', 'training', 'courses'],
-    'projects': ['projects', 'key projects', 'academic projects', 'research projects', 'personal projects'],
-    'achievements': ['achievements', 'accomplishments', 'awards', 'publications', 'recognitions', 'certifications',
-        'courses', 'training', 'licenses']
+    'skills': ['skills', 'technical skills', 'competencies', 'proficiencies', 
+               'tools', 'technologies', 'languages', 'frameworks', 'expertise'],
+    'education': ['education', 'academic background', 'qualifications', 'degrees', 
+                  'certifications', 'training', 'courses', 'academics', 'scholastics'],
+    'projects': ['projects', 'key projects', 'academic projects', 'research projects', 
+                 'personal projects', 'work experience', 'portfolio', 'initiatives'],
+    'achievements': ['achievements', 'accomplishments', 'awards', 'publications', 
+                     'recognitions', 'honors', 'certificates', 'licenses', 'credentials']
 }
+
+# Reputed colleges - loaded once
 REPUTED_COLLEGES = set()
 with open("reputed_colleges.txt", "r", encoding="utf-8") as f:
     for line in f:
         REPUTED_COLLEGES.add(line.strip().lower())
-print("✅ Loaded colleges:", list(REPUTED_COLLEGES)[:5])  # Preview first 5
-print(f"✅ Total loaded: {len(REPUTED_COLLEGES)}")
+
+if VERBOSE:
+    print(f"✅ Loaded {len(REPUTED_COLLEGES)} reputed colleges")
+
+# Cache for JD embeddings
+JD_EMBEDDING_CACHE = {}
+
+def log_message(message):
+    """Log message if verbose mode is enabled"""
+    if VERBOSE:
+        print(message)
 
 def compute_bonus(candidate, jd_data, relevant_certifications_found=False):
-    bonus_factor = 1.0  # Start with no bonus (1.0 multiplier)
+    """Compute experience/fresher bonus with CGPA normalization"""
+    bonus_factor = 1.0
     is_fresher_only = jd_data.get("fresher_allowed", False) and not jd_data.get("experienced_allowed", False)
     is_experienced_only = jd_data.get("experienced_allowed", False) and not jd_data.get("fresher_allowed", False)
     is_both_allowed = jd_data.get("fresher_allowed", False) and jd_data.get("experienced_allowed", False)
@@ -31,134 +57,117 @@ def compute_bonus(candidate, jd_data, relevant_certifications_found=False):
     experience_list = candidate.get("experience", [])
     name = candidate.get("personal_details", {}).get("name", "Unknown")
 
-    # 🎓 CGPA Bonus (only for freshers)
+    # 🎓 CGPA Bonus (with normalization)
     try:
         cgpa_str = candidate.get("education", [{}])[0].get("cgpa", "")
-        cgpa = float(cgpa_str) if cgpa_str else 0
-        if is_fresher_only or is_both_allowed:
-            if cgpa >= 9.0:
-                bonus_factor *= 1.08  # 8% bonus
-                print(f"🎓 CGPA Bonus for {name} → ×1.08")
-            elif cgpa >= 8.0:
-                bonus_factor *= 1.05  # 5% bonus
-                print(f"🎓 CGPA Bonus for {name} → ×1.05")
-    except:
-        pass
+        if cgpa_str:
+            # Normalize CGPA (convert 4.0 scale to 10.0 scale if needed)
+            if '/' in cgpa_str:
+                parts = cgpa_str.split('/')
+                cgpa = float(parts[0].strip())
+                max_scale = float(parts[1].strip())
+                if max_scale == 4.0:
+                    cgpa = cgpa * 2.5  # Convert to 10-point scale
+            else:
+                cgpa = float(cgpa_str)
+                
+            if is_fresher_only or is_both_allowed:
+                if cgpa >= 9.0:
+                    bonus_factor *= 1.08
+                    log_message(f"🎓 CGPA Bonus for {name} → ×1.08")
+                elif cgpa >= 8.0:
+                    bonus_factor *= 1.05
+                    log_message(f"🎓 CGPA Bonus for {name} → ×1.05")
+    except Exception as e:
+        if VERBOSE:
+            print(f"⚠️ CGPA conversion error: {e}")
 
     # 🏅 Certification Bonus
     if relevant_certifications_found:
         if is_fresher_only or is_both_allowed:
-            bonus_factor *= 1.08  # 8% bonus
-            print(f"🏅 Certification Bonus for {name} → ×1.08")
+            bonus_factor *= 1.08
+            log_message(f"🏅 Certification Bonus for {name} → ×1.08")
         elif is_experienced_only:
-            bonus_factor *= 1.04  # 4% bonus
-            print(f"🏅 Certification Bonus for {name} → ×1.04")
+            bonus_factor *= 1.04
+            log_message(f"🏅 Certification Bonus for {name} → ×1.04")
 
-    # 💼 Internship or Experience Bonus
+    # 💼 Experience Bonus (with date standardization)
     if is_fresher_only:
-        # Only internships matter
         for exp in experience_list:
             role = exp.get("job_title", "").lower()
             company = exp.get("current_company", "").lower()
             if "intern" in role or "intern" in company:
-                bonus_factor *= 1.15  # 15% bonus
-                print(f"💼 Internship Bonus for {name} (Fresher) → ×1.15")
+                bonus_factor *= 1.15
+                log_message(f"💼 Internship Bonus for {name} (Fresher) → ×1.15")
                 break
 
-    elif is_experienced_only:
-        # Only full experience matters
+    elif is_experienced_only or is_both_allowed:
         total_years = 0
         for exp in experience_list:
             try:
-                from_year = int(exp.get("from_year", 0))
-                to_year = int(exp.get("to_year", datetime.datetime.now().year))
-                total_years += max(0, to_year - from_year)
-            except:
-                continue
+                # Standardize date formats
+                duration = exp.get("employment_duration", "")
+                if duration:
+                    # Handle "MM/YYYY - MM/YYYY" format
+                    if '-' in duration:
+                        parts = duration.split('-')
+                        start = parts[0].strip()
+                        end = parts[1].strip()
+                        
+                        # Parse dates
+                        start_date = datetime.datetime.strptime(start, "%m/%Y")
+                        end_date = datetime.datetime.strptime(end, "%m/%Y") if end.lower() != "present" \
+                            else datetime.datetime.now()
+                            
+                        total_years += (end_date - start_date).days / 365.25
+                    # Handle "YYYY-YYYY" format
+                    elif len(duration) == 9 and duration[4] == '-':
+                        start_year = int(duration[:4])
+                        end_year = int(duration[5:]) if duration[5:] != "Present" \
+                            else datetime.datetime.now().year
+                        total_years += end_year - start_year
+            except Exception as e:
+                if VERBOSE:
+                    print(f"⚠️ Experience duration error: {e}")
+        
         if total_years >= 1:
             exp_bonus = min(0.15, 0.03 * total_years)
             bonus_factor *= (1 + exp_bonus)
-            print(f"📈 Experience Bonus for {name} → ×{1+exp_bonus:.2f} ({total_years} yrs)")
+            log_message(f"📈 Experience Bonus for {name} → ×{1+exp_bonus:.2f} ({total_years:.1f} yrs)")
 
-    elif is_both_allowed:
-        # Prefer experience if present; else give internship bonus
-        total_years = 0
-        for exp in experience_list:
-            try:
-                from_year = int(exp.get("from_year", 0))
-                to_year = int(exp.get("to_year", datetime.datetime.now().year))
-                total_years += max(0, to_year - from_year)
-            except:
-                continue
-
-        if total_years >= 1:
-            exp_bonus = min(0.15, 0.03 * total_years)
-            bonus_factor *= (1 + exp_bonus)
-            print(f"📈 Experience Bonus for {name} (Both allowed) → ×{1+exp_bonus:.2f} ({total_years} yrs)")
-        else:
-            for exp in experience_list:
-                role = exp.get("job_title", "").lower()
-                company = exp.get("current_company", "").lower()
-                if "intern" in role or "intern" in company:
-                    bonus_factor *= 1.15  # 15% bonus
-                    print(f"💼 Internship Bonus for {name} (Both allowed) → ×1.15")
-                    break
-
-    # Return the multiplicative factor - 1.0 means no bonus
     return bonus_factor - 1.0
 
 def is_reputed_college(college_name, threshold=0.85):
+    """Check if college is reputed with improved matching"""
     if not college_name:
         return False
     normalized = college_name.strip().lower()
     
-    best_match = None
+    # First check exact match for performance
+    if normalized in REPUTED_COLLEGES:
+        return True
+        
+    # Then check for close matches
     best_score = 0
-
     for rep_college in REPUTED_COLLEGES:
         score = difflib.SequenceMatcher(None, normalized, rep_college).ratio()
         if score > best_score:
             best_score = score
-            best_match = rep_college
-    if best_score >= threshold:
-        return True
-    return False  # Silently return False without logging
+        if best_score >= threshold:
+            return True
+    return False
+
 def compute_certification_relevance(cert_text_block, jd_required_text, jd_nice_text, threshold=0.5):
+    """Improved certification relevance with symmetric keyword matching"""
     if not cert_text_block or not jd_required_text:
         return 0.0
 
     jd_full = (jd_required_text + " " + jd_nice_text).lower()
     jd_keywords = set(re.findall(r'\b\w{3,}\b', jd_full))
-
-    jd_emb = bi_encoder.encode(jd_full, convert_to_tensor=True)
-    cert_lines = [line.strip() for line in cert_text_block.split('\n') if line.strip()]
-    total_bonus = 0.0
-    relevant_count = 0
-    for line in cert_lines:
-        cert_emb = bi_encoder.encode(line, convert_to_tensor=True)
-        emb_score = util.pytorch_cos_sim(jd_emb, cert_emb).item()
-
-        cert_keywords = set(re.findall(r'\b\w{3,}\b', line.lower()))
-        keyword_overlap = len(jd_keywords & cert_keywords) / max(1, len(jd_keywords))
-
-        if emb_score >= threshold or keyword_overlap >= 0.01:
-            bonus = min(0.03, 0.015 + 0.02 * emb_score)
-            total_bonus += bonus
-            relevant_count += 1
-    if relevant_count:
-        print(f"✅ Found {relevant_count} relevant certifications")
-    return min(0.05, total_bonus)
-def compute_certification_relevance(cert_text_block, jd_required_text, jd_nice_text, threshold=0.5):
-    """
-    Scores certifications by relevance to JD using embeddings + keyword overlap.
-    """
-    if not cert_text_block or not jd_required_text:
-        return 0.0
-
-    jd_full = (jd_required_text + " " + jd_nice_text).lower()
-    jd_keywords = set(re.findall(r'\b\w{3,}\b', jd_full))
-
-    jd_emb = bi_encoder.encode(jd_full, convert_to_tensor=True)
+    
+    # Precompute JD embedding
+    jd_emb = get_jd_embedding(jd_full)
+    
     cert_lines = [line.strip() for line in cert_text_block.split('\n') if line.strip()]
     total_bonus = 0.0
 
@@ -167,36 +176,49 @@ def compute_certification_relevance(cert_text_block, jd_required_text, jd_nice_t
         emb_score = util.pytorch_cos_sim(jd_emb, cert_emb).item()
 
         cert_keywords = set(re.findall(r'\b\w{3,}\b', line.lower()))
-        keyword_overlap = len(jd_keywords & cert_keywords) / max(1, len(jd_keywords))
+        intersection = jd_keywords & cert_keywords
+        
+        # Symmetric keyword overlap
+        if intersection:
+            jd_ratio = len(intersection) / max(1, len(jd_keywords))
+            cert_ratio = len(intersection) / max(1, len(cert_keywords))
+            keyword_overlap = (jd_ratio + cert_ratio) / 2  # Average both ratios
+        else:
+            keyword_overlap = 0
 
-        is_relevant = emb_score >= threshold or keyword_overlap >= 0.01  # Either match can trigger
+        is_relevant = emb_score >= threshold or keyword_overlap >= 0.01
 
         if is_relevant:
             bonus = min(0.03, 0.015 + 0.02 * emb_score)
             total_bonus += bonus
-            print(f"✅ '{line}' → emb_score={emb_score:.2f}, keyword_overlap={keyword_overlap:.2f}, bonus=+{bonus:.2f}")
-        else:
-            print(f"❌ '{line}' irrelevant → emb_score={emb_score:.2f}, keyword_overlap={keyword_overlap:.2f}")
+            if VERBOSE:
+                print(f"✅ '{line[:50]}' → emb={emb_score:.2f}, kwo={keyword_overlap:.2f}, bonus=+{bonus:.2f}")
+        elif VERBOSE:
+            print(f"❌ '{line[:50]}' irrelevant → emb={emb_score:.2f}, kwo={keyword_overlap:.2f}")
 
     return min(0.05, total_bonus)
+
+@lru_cache(maxsize=100)
+def get_jd_embedding(jd_text):
+    """Get cached JD embedding"""
+    return bi_encoder.encode(jd_text, convert_to_tensor=True)
+
 def compute_education_match(resume_edu_text, jd_qual_text):
     if not resume_edu_text or not jd_qual_text:
         return 0.0
-    jd_embedding = bi_encoder.encode(jd_qual_text, convert_to_tensor=True)
+    jd_embedding = get_jd_embedding(jd_qual_text)
     edu_embedding = bi_encoder.encode(resume_edu_text, convert_to_tensor=True)
     return util.pytorch_cos_sim(jd_embedding, edu_embedding).item()
+
 def compute_project_to_role_similarity(projects, jd_summary):
     combined_proj = " ".join(p.get("description", "") for p in projects)
     if not combined_proj or not jd_summary:
         return 0.0
-    jd_embedding = bi_encoder.encode(jd_summary, convert_to_tensor=True)
-    proj_embedding = bi_encoder.encode(combined_proj.strip(), convert_to_tensor=True)
-    return util.pytorch_cos_sim(jd_embedding, proj_embedding).item()
-def keyword_presence_bonus(resume_text, keywords):
-    if not resume_text or not keywords:
-        return 0.0
-    hits = sum(1 for word in keywords if word.lower() in resume_text.lower())
-    return min(0.03, 0.01 * hits)  
+        
+    # Batch encode for efficiency
+    texts_to_encode = [jd_summary, combined_proj.strip()]
+    embeddings = bi_encoder.encode(texts_to_encode, convert_to_tensor=True)
+    return util.pytorch_cos_sim(embeddings[0], embeddings[1]).item()
 
 def extract_text_from_pdf(pdf_path):
     try:
@@ -209,7 +231,7 @@ def extract_text_from_pdf(pdf_path):
                     text += block[4] + "\n"
         return text.strip()
     except Exception as e:
-        print(f"❌ Error reading {pdf_path}: {e}")
+        log_message(f"❌ Error reading {pdf_path}: {e}")
         return ""
 
 def clean_text(text):
@@ -218,38 +240,48 @@ def clean_text(text):
     return text
 
 def extract_sections(text, section_definitions):
+    """Extract resume sections with enhanced synonym handling"""
     text = clean_text(text)
     sections = defaultdict(list)
     current_section = 'other'
     lines = text.split('\n')
-    section_patterns = {sec: re.compile(r'\b(' + '|'.join(patterns) + r')\b', re.I) 
-                        for sec, patterns in section_definitions.items()}
-
+    
+    # Create inverse mapping from keyword to section
+    keyword_to_section = {}
+    for section, keywords in section_definitions.items():
+        for keyword in keywords:
+            keyword_to_section[keyword] = section
+    
     for line in lines:
         line = line.strip()
         if not line:
             continue
             
         matched = False
-        for section, pattern in section_patterns.items():
-            if pattern.search(line) and len(line.split()) < 10:
-                current_section = section
-                matched = True
-                continue
+        # Check if line contains any section keyword
+        for keyword, section in keyword_to_section.items():
+            if re.search(r'\b' + re.escape(keyword) + r'\b', line, re.IGNORECASE):
+                if len(line.split()) < 10:  # Avoid long sentences
+                    current_section = section
+                    matched = True
+                    break
                 
         sections[current_section].append(line)
+    
+    # Fallback for missing sections
     for section in section_definitions:
-        if not sections[section] and section != 'other':
+        if not sections[section]:
             sections[section] = [text]
             
     return {k: ' '.join(v) for k, v in sections.items()}
+
 def calculate_similarity(jd_text, resume_text):
     if not jd_text or not resume_text:
         return 0.0, 0.0, 0.0
 
-    jd_embedding = bi_encoder.encode(jd_text, convert_to_tensor=True)
-    resume_embedding = bi_encoder.encode(resume_text, convert_to_tensor=True)
-    semantic_score = util.pytorch_cos_sim(jd_embedding, resume_embedding).item()
+    # Batch encode for efficiency
+    embeddings = bi_encoder.encode([jd_text, resume_text], convert_to_tensor=True)
+    semantic_score = util.pytorch_cos_sim(embeddings[0], embeddings[1]).item()
 
     jd_words = set(re.findall(r'\b\w{3,}\b', jd_text.lower()))
     resume_words = set(re.findall(r'\b\w{3,}\b', resume_text.lower()))
@@ -262,68 +294,37 @@ def calculate_similarity(jd_text, resume_text):
     return scaled, semantic_score, keyword_score
 
 def is_fresher_candidate(form_data):
+    """Check if candidate is fresher with date standardization"""
     try:
-        grad_year = int(form_data.get("education", [{}])[0].get("graduation", ""))
-        return grad_year >= datetime.datetime.now().year - 2
+        grad_date = form_data.get("education", [{}])[0].get("graduation", "")
+        if not grad_date:
+            return True
+            
+        # Handle different date formats
+        current_year = datetime.datetime.now().year
+        
+        if len(grad_date) == 4:  # "2023"
+            grad_year = int(grad_date)
+        elif '-' in grad_date:  # "2020-2024"
+            grad_year = int(grad_date.split('-')[-1])
+        elif '/' in grad_date:  # "05/2024"
+            parts = grad_date.split('/')
+            grad_year = int(parts[1]) if len(parts) > 1 else current_year
+        else:
+            return True
+            
+        return grad_year >= current_year - 2
     except:
         return True
-
 
 def compute_skill_similarity(candidate_skills, jd_skills_text):
     if not candidate_skills or not jd_skills_text:
         return 0.0
-    candidate_str = ' '.join(candidate_skills)
-    jd_embedding = bi_encoder.encode(jd_skills_text, convert_to_tensor=True)
-    cand_embedding = bi_encoder.encode(candidate_str, convert_to_tensor=True)
-    return util.pytorch_cos_sim(jd_embedding, cand_embedding).item()
-
-def compute_project_skill_similarity(projects, jd_skills_text):
-    if not projects or not jd_skills_text:
-        return 0.0
-    combined_text = " ".join(
-        p.get("tech_stack", "") + " " + p.get("description", "") for p in projects
-    )
-    if not combined_text.strip():
-        return 0.0
-    jd_embedding = bi_encoder.encode(jd_skills_text, convert_to_tensor=True)
-    proj_embedding = bi_encoder.encode(combined_text.strip(), convert_to_tensor=True)
-    return util.pytorch_cos_sim(jd_embedding, proj_embedding).item()
-
-def compute_section_scores(jd_sections, resume_sections):
-    scores = {}
-    for section in GENERIC_SECTIONS:
-        jd_content = jd_sections.get(section, '')
-        resume_content = resume_sections.get(section, '')
-        if jd_content and resume_content:
-            scores[section], _, _ = calculate_similarity(jd_content, resume_content)
-        else:
-            scores[section] = 0.0
-    return scores
-def generate_key_highlights(section_scores, edu_score, project_role_score, cert_bonus, is_reputed):
-    highlights = []
-
-    highlights.append(f"Skills Match: {section_scores.get('skills', 0.0):.2f}")
-    highlights.append(f"Project Match: {section_scores.get('projects', 0.0):.2f}")
-    highlights.append(f"Education Similarity: {edu_score:.2f}")
-    highlights.append(f"Project–Role Alignment: {project_role_score:.2f}")
-
-    if cert_bonus > 0:
-        highlights.append(f"Certification Bonus: +{cert_bonus:.2f}")
-    if is_reputed:
-        highlights.append("🎓 Reputed College Bonus: +0.03")
-
-    return highlights
-
-
-def compute_final_score(section_scores, weights):
-    total = 0
-    total_weight = 0
-    for section, score in section_scores.items():
-        weight = weights.get(section, 1.0)
-        total += score * weight
-        total_weight += weight
-    raw_score = total / total_weight if total_weight > 0 else 0
-    return min(0.95, max(0.4, 0.45 + raw_score * 0.5))
+        
+    # Batch encode for efficiency
+    texts = [' '.join(candidate_skills), jd_skills_text]
+    embeddings = bi_encoder.encode(texts, convert_to_tensor=True)
+    return util.pytorch_cos_sim(embeddings[0], embeddings[1]).item()
 
 def analyze_jd(jd_text):
     sections = extract_sections(jd_text, GENERIC_SECTIONS)
@@ -344,7 +345,8 @@ def analyze_jd(jd_text):
         weight = base_weight * (0.5 + 0.5 * (content_words / max(total_words, 1)))
         weights[section] = weight
         
-        print(f"🔹 JD Section: {section.upper()} - Weight: {weight:.2f}")
+        if VERBOSE:
+            print(f"🔹 JD Section: {section.upper()} - Weight: {weight:.2f}")
     
     return sections, weights
 
@@ -359,10 +361,8 @@ def is_candidate_allowed(candidate, jd_data):
         return False
     return True
 
-# ranking_logic.py (complete scoring overhaul)
-
-# ranking_logic.py (fixed version)
-def compute_deep_score(candidate, jd_data):
+def compute_deep_score(candidate, jd_data, jd_embeddings_cache):
+    """Compute deep score with performance optimizations"""
     form_data = candidate["form_data"]
     resume_text = candidate["resume_text"]
     resume_sections = candidate["resume_sections"]
@@ -381,40 +381,42 @@ def compute_deep_score(candidate, jd_data):
     jd_sections = jd_data.get("jd_sections", {})
     jd_weights = jd_data.get("jd_weights", {})
 
-    # --- Core Resume-JD Similarity (most important) ---
-    resume_text = clean_text(resume_text)
+    # --- Core Resume-JD Similarity ---
     jd_full_text = " ".join([
         jd_data.get("job_title", ""),
         jd_data.get("job_summary", ""),
         jd_data.get("responsibilities", ""),
-        jd_data.get("experience_skills", ""),
-        jd_data.get("nice_to_have_skills", "")
+        jd_required,
+        jd_nice
     ])
     jd_full_text = clean_text(jd_full_text)
     
-    # Direct similarity between resume and full JD text
-    jd_embedding = bi_encoder.encode(jd_full_text, convert_to_tensor=True)
+    # Use cached embedding if available
+    cache_key = hash(jd_full_text)
+    if cache_key in jd_embeddings_cache:
+        jd_embedding = jd_embeddings_cache[cache_key]
+    else:
+        jd_embedding = bi_encoder.encode(jd_full_text, convert_to_tensor=True)
+        jd_embeddings_cache[cache_key] = jd_embedding
+    
     resume_embedding = bi_encoder.encode(resume_text, convert_to_tensor=True)
     core_similarity = util.pytorch_cos_sim(jd_embedding, resume_embedding).item()
     
-    # Start with core similarity as base score
     base_score = core_similarity
 
-    # --- Skill Matching Enhancement ---
+    # --- Skill Matching ---
     req_match_form = compute_skill_similarity(form_skills, jd_required)
     nice_match_form = compute_skill_similarity(form_skills, jd_nice)
     skill_boost = 0.5 * req_match_form + 0.2 * nice_match_form
-    
-    # Apply skill boost multiplicatively
-    base_score = base_score * (1 + 0.3 * skill_boost)
+    base_score *= (1 + 0.3 * skill_boost)
 
     # --- Project Relevance ---
     project_relevance = compute_project_to_role_similarity(projects, jd_summary)
-    base_score = base_score * (1 + 0.2 * project_relevance)
+    base_score *= (1 + 0.2 * project_relevance)
 
     # --- Education Match ---
     edu_match = compute_education_match(resume_sections.get("education", ""), jd_qualification)
-    base_score = base_score * (1 + 0.1 * edu_match)
+    base_score *= (1 + 0.1 * edu_match)
 
     # --- Certification Bonus ---
     cert_bonus = 0.0
@@ -423,7 +425,7 @@ def compute_deep_score(candidate, jd_data):
         cert_bonus = compute_certification_relevance(
             resume_cert_text, jd_required, jd_nice
         )
-        base_score = base_score * (1 + 0.5 * cert_bonus)
+        base_score *= (1 + 0.5 * cert_bonus)
 
     # --- Section Similarity ---
     section_score = 0.0
@@ -439,76 +441,70 @@ def compute_deep_score(candidate, jd_data):
     
     if total_weight > 0:
         section_score /= total_weight
-        base_score = base_score * (1 + 0.2 * section_score)
+        base_score *= (1 + 0.2 * section_score)
 
     # --- Reputed College Bonus ---
     college = form_data.get("education", [{}])[0].get("college", "")
     reputed_bonus = False
     if jd_data.get("filter_by_reputed_colleges", False) and is_reputed_college(college):
-        base_score *= 1.05  # 5% bonus
+        base_score *= 1.05
         reputed_bonus = True
 
     # --- Experience/Fresher Bonus ---
     exp_bonus = compute_bonus(form_data, jd_data, cert_bonus > 0)
     base_score *= (1 + exp_bonus)
 
-    # Final score should be between 0.4-0.97
+    # Final score bounds
     final_score = max(0.4, min(0.97, base_score))
 
     # --- Key Highlights ---
     highlights = [
-        f"Core Similarity: {core_similarity:.2f}",
-        f"Skill Boost: {skill_boost:.2f}",
-        f"Project Relevance: {project_relevance:.2f}",
+        f"Core: {core_similarity:.2f}",
+        f"Skills: {skill_boost:.2f}",
+        f"Projects: {project_relevance:.2f}",
     ]
 
     if edu_match > 0:
-        highlights.append(f"Education Match: {edu_match:.2f}")
+        highlights.append(f"Education: {edu_match:.2f}")
     if section_score > 0:
-        highlights.append(f"Section Match: {section_score:.2f}")
+        highlights.append(f"Sections: {section_score:.2f}")
     if cert_bonus > 0:
-        highlights.append(f"Cert Bonus: {cert_bonus:.2f}")
+        highlights.append(f"Cert: {cert_bonus:.2f}")
     if reputed_bonus:
-        highlights.append("🎓 Reputed College")
+        highlights.append("🎓 Top College")
     if exp_bonus > 0:
-        highlights.append(f"Exp Bonus: {exp_bonus:.2f}")
+        highlights.append(f"Exp: {exp_bonus:.2f}")
     
     return {
         "final_score": round(final_score, 4),
         "name": candidate_name,
-        "core_similarity": round(core_similarity, 4),
-        "skill_boost": round(skill_boost, 4),
-        "project_relevance": round(project_relevance, 4),
         "highlights": highlights
     }
-def rank_resumes_for_jd(jd_pdf_path, resumes, jd_data):
-    ranked_results = []
 
-    # 📝 Extract JD text and sections
+def rank_resumes_for_jd(jd_pdf_path, resumes, jd_data):
+    start_time = time.time()
+    ranked_results = []
+    jd_embeddings_cache = {}
+    
+    # Precompute JD text and sections
     jd_text = extract_text_from_pdf(jd_pdf_path)
     jd_sections, jd_weights = analyze_jd(jd_text)
     jd_data["jd_sections"] = jd_sections
+    jd_data["jd_weights"] = jd_weights
 
-    # 🚀 Stage 1: Semantic + Keyword similarity
+    # Batch process Stage 1
+    batch_texts = []
     for resume in resumes:
-        name = resume.get("personal_details", {}).get("name", "Unknown")
-        print(f"\n📄 Resume: {name}")
-
         resume_path = resume.get("resume_filepath", "")
         resume_text = extract_text_from_pdf(resume_path)
-        resume["resume_text"] = resume_text  # Save for Stage 2
-
-        # ✅ Properly extract resume sections after resume_text is available
+        resume["resume_text"] = resume_text
+        batch_texts.append(resume_text)
+        
+        # Extract resume sections
         resume_sections = extract_sections(resume_text, GENERIC_SECTIONS)
         resume["resume_sections"] = resume_sections
-
-        # 🎯 Stage 1 similarity scoring
-        stage1_scaled, semantic_score, keyword_score = calculate_similarity(jd_text, resume_text)
-        resume["semantic_score"] = round(semantic_score, 4)
-        resume["keyword_score"] = round(keyword_score, 4)
-        resume["stage1_score"] = round(stage1_scaled, 4)
-
-        # 💡 Patch missing form_data
+        
+        # Ensure form_data exists
         if "form_data" not in resume:
             resume["form_data"] = {
                 "education": resume.get("education", []),
@@ -519,37 +515,67 @@ def rank_resumes_for_jd(jd_pdf_path, resumes, jd_data):
                 "personal_details": resume.get("personal_details", {}),
             }
 
-        print(f"🔹 Semantic: {semantic_score:.4f} | Keyword: {keyword_score:.4f} → Stage 1 Score: {stage1_scaled:.4f}")
-        ranked_results.append(resume)
+    # Batch compute Stage 1 scores
+    jd_emb = bi_encoder.encode(jd_text, convert_to_tensor=True)
+    resume_embs = bi_encoder.encode(batch_texts, convert_to_tensor=True)
+    
+    for i, resume in enumerate(resumes):
+        semantic_score = util.pytorch_cos_sim(jd_emb, resume_embs[i]).item()
+        
+        # Compute keyword score
+        jd_words = set(re.findall(r'\b\w{3,}\b', jd_text.lower()))
+        resume_words = set(re.findall(r'\b\w{3,}\b', resume["resume_text"].lower()))
+        keyword_score = min(1.0, len(jd_words & resume_words) / max(1, len(jd_words)))
 
-    # ✅ Sort Stage 1 results
-    ranked_results.sort(key=lambda x: x["stage1_score"], reverse=True)
+        combined = (0.75 * semantic_score) + (0.25 * keyword_score)
+        stage1_scaled = min(0.95, max(0.4, 0.45 + combined * 0.5))
+        
+        resume["semantic_score"] = round(semantic_score, 4)
+        resume["keyword_score"] = round(keyword_score, 4)
+        resume["stage1_score"] = round(stage1_scaled, 4)
+        
+        if VERBOSE:
+            name = resume.get("personal_details", {}).get("name", "Unknown")
+            print(f"📄 {name}: Semantic={semantic_score:.4f}, Keyword={keyword_score:.4f} → Stage1={stage1_scaled:.4f}")
 
-    # ✅ Print leaderboard
-    print("\n🔎 STAGE 1 RESULTS (Semantic + Keyword only):")
-    for idx, r in enumerate(ranked_results, 1):
-        print(f" {idx}. {r.get('personal_details', {}).get('name', 'Unknown'):25} → Stage 1 Score: {r['stage1_score']:.4f}")
+    # Sort Stage 1 results
+    ranked_results = sorted(resumes, key=lambda x: x["stage1_score"], reverse=True)
+    
+    if VERBOSE:
+        print("\n🔎 STAGE 1 RESULTS:")
+        for idx, r in enumerate(ranked_results, 1):
+            name = r.get("personal_details", {}).get("name", "Unknown")
+            print(f" {idx}. {name[:20]:20} → Score: {r['stage1_score']:.4f}")
 
-    # ✅ Take top 80% of candidates for Stage 2
-    top_80_percent = int(len(ranked_results) * 0.8) or 1
-    shortlisted = ranked_results[:top_80_percent]
-
-    # 🧠 Stage 2: Deep Ranking using bonus logic
+    # Take top candidates for Stage 2
+    top_count = max(1, int(len(ranked_results) * 0.8))
+    shortlisted = ranked_results[:top_count]
+    
+    # Process Stage 2 in batches
+    batch_size = 8  # Optimal batch size for GPU
     final_ranked = []
-    for r in shortlisted:
-        deep_result = compute_deep_score(r, jd_data)
-        if deep_result is not None:
-            r["final_score"] = deep_result["final_score"]
-            # Remove this line: r["section_scores"] = deep_result["section_scores"]
-            r["highlights"] = deep_result["highlights"]
-            final_ranked.append(r)
+    
+    for i in range(0, len(shortlisted), batch_size):
+        batch = shortlisted[i:i+batch_size]
+        for resume in batch:
+            deep_result = compute_deep_score(resume, jd_data, jd_embeddings_cache)
+            if deep_result is not None:
+                resume["final_score"] = deep_result["final_score"]
+                resume["highlights"] = deep_result["highlights"]
+                final_ranked.append(resume)
 
-    # ✅ Sort by final deep score
+    # Sort by final score
     final_ranked.sort(key=lambda x: x["final_score"], reverse=True)
-
-    # ✅ Print final results
-    print("\n🎯 STAGE 2 RESULTS (Final Ranking):")
-    for idx, r in enumerate(final_ranked, 1):
-        print(f" {idx}. {r.get('personal_details', {}).get('name', 'Unknown'):25} → Final Score: {r['final_score']:.4f}")
+    
+    if VERBOSE:
+        print("\n🎯 FINAL RANKING:")
+        for idx, r in enumerate(final_ranked, 1):
+            name = r.get("personal_details", {}).get("name", "Unknown")
+            print(f" {idx}. {name[:20]:20} → Score: {r['final_score']:.4f}")
+        
+        elapsed = time.time() - start_time
+        print(f"\n⏱️  Processed {len(resumes)} resumes in {elapsed:.2f} seconds")
+        print(f"  - Stage 1: {len(resumes)} resumes")
+        print(f"  - Stage 2: {len(shortlisted)} resumes")
 
     return final_ranked
