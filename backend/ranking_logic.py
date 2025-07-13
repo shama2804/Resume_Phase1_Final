@@ -1,4 +1,4 @@
-# ranking_logic.py (optimized and improved)
+
 import os
 import re
 import fitz
@@ -15,7 +15,6 @@ from functools import lru_cache
 # Verbose logging control - set to False for production
 VERBOSE = True
 
-nltk.download('punkt', quiet=True)
 bi_encoder = SentenceTransformer('all-MiniLM-L6-v2')
 
 # Enhanced section definitions with synonyms
