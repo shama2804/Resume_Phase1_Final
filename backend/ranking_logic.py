@@ -1,21 +1,25 @@
-
+# ranking_logic.py (optimized with all improvements)
 import os
 import re
 import fitz
 import nltk
 import datetime
 import time
-import pickle
+import hashlib
 from collections import defaultdict
 from sentence_transformers import SentenceTransformer, util
 import difflib
-import numpy as np
-from functools import lru_cache
+
+# Detect GPU and configure device
+import torch
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"🚀 Using device: {device}")
 
 # Verbose logging control - set to False for production
 VERBOSE = True
 
-bi_encoder = SentenceTransformer('all-MiniLM-L6-v2')
+nltk.download('punkt', quiet=True)
+bi_encoder = SentenceTransformer('all-MiniLM-L6-v2', device=device)
 
 # Enhanced section definitions with synonyms
 GENERIC_SECTIONS = {
@@ -197,10 +201,17 @@ def compute_certification_relevance(cert_text_block, jd_required_text, jd_nice_t
 
     return min(0.05, total_bonus)
 
-@lru_cache(maxsize=100)
 def get_jd_embedding(jd_text):
-    """Get cached JD embedding"""
-    return bi_encoder.encode(jd_text, convert_to_tensor=True)
+    """Get cached JD embedding with persistent key"""
+    # Create MD5 hash for consistent caching
+    cache_key = hashlib.md5(jd_text.encode()).hexdigest()
+    
+    if cache_key in JD_EMBEDDING_CACHE:
+        return JD_EMBEDDING_CACHE[cache_key]
+    
+    embedding = bi_encoder.encode(jd_text, convert_to_tensor=True)
+    JD_EMBEDDING_CACHE[cache_key] = embedding
+    return embedding
 
 def compute_education_match(resume_edu_text, jd_qual_text):
     if not resume_edu_text or not jd_qual_text:
@@ -220,15 +231,32 @@ def compute_project_to_role_similarity(projects, jd_summary):
     return util.pytorch_cos_sim(embeddings[0], embeddings[1]).item()
 
 def extract_text_from_pdf(pdf_path):
+    """Extract text from PDF with fallback for short content"""
     try:
         doc = fitz.open(pdf_path)
         text = ""
+        fallback_text = ""  # For full-page extraction
+        
         for page in doc:
+            # First pass: Filter out headers/footers
             blocks = page.get_text("blocks")
+            filtered_text = ""
             for block in blocks:
                 if 0.1 < block[1] / page.rect.height < 0.9:
-                    text += block[4] + "\n"
-        return text.strip()
+                    filtered_text += block[4] + "\n"
+            
+            # Second pass: Full page extraction
+            fallback_text += page.get_text() + "\n"
+            text += filtered_text
+            
+        text = text.strip()
+        
+        # Fallback if filtered text is too short
+        if len(text) < 200 and len(fallback_text) > len(text):
+            log_message(f"⚠️ Using fallback text for {pdf_path} (filtered: {len(text)}, full: {len(fallback_text)})")
+            return fallback_text.strip()
+            
+        return text
     except Exception as e:
         log_message(f"❌ Error reading {pdf_path}: {e}")
         return ""
@@ -390,14 +418,8 @@ def compute_deep_score(candidate, jd_data, jd_embeddings_cache):
     ])
     jd_full_text = clean_text(jd_full_text)
     
-    # Use cached embedding if available
-    cache_key = hash(jd_full_text)
-    if cache_key in jd_embeddings_cache:
-        jd_embedding = jd_embeddings_cache[cache_key]
-    else:
-        jd_embedding = bi_encoder.encode(jd_full_text, convert_to_tensor=True)
-        jd_embeddings_cache[cache_key] = jd_embedding
-    
+    # Use cached embedding
+    jd_embedding = get_jd_embedding(jd_full_text)
     resume_embedding = bi_encoder.encode(resume_text, convert_to_tensor=True)
     core_similarity = util.pytorch_cos_sim(jd_embedding, resume_embedding).item()
     
@@ -505,6 +527,7 @@ def rank_resumes_for_jd(jd_pdf_path, resumes, jd_data):
         
         # Ensure form_data exists
         if "form_data" not in resume:
+            log_message(f"⚠️ Fabricating form_data for {resume.get('personal_details', {}).get('name', 'Unknown')}")
             resume["form_data"] = {
                 "education": resume.get("education", []),
                 "experience": resume.get("experience", []),
@@ -515,7 +538,7 @@ def rank_resumes_for_jd(jd_pdf_path, resumes, jd_data):
             }
 
     # Batch compute Stage 1 scores
-    jd_emb = bi_encoder.encode(jd_text, convert_to_tensor=True)
+    jd_emb = get_jd_embedding(jd_text)
     resume_embs = bi_encoder.encode(batch_texts, convert_to_tensor=True)
     
     for i, resume in enumerate(resumes):
@@ -525,7 +548,7 @@ def rank_resumes_for_jd(jd_pdf_path, resumes, jd_data):
         jd_words = set(re.findall(r'\b\w{3,}\b', jd_text.lower()))
         resume_words = set(re.findall(r'\b\w{3,}\b', resume["resume_text"].lower()))
         keyword_score = min(1.0, len(jd_words & resume_words) / max(1, len(jd_words)))
-
+        
         combined = (0.75 * semantic_score) + (0.25 * keyword_score)
         stage1_scaled = min(0.95, max(0.4, 0.45 + combined * 0.5))
         
@@ -551,7 +574,7 @@ def rank_resumes_for_jd(jd_pdf_path, resumes, jd_data):
     shortlisted = ranked_results[:top_count]
     
     # Process Stage 2 in batches
-    batch_size = 8  # Optimal batch size for GPU
+    batch_size = 8 if device == "cuda" else 4  # Larger batches for GPU
     final_ranked = []
     
     for i in range(0, len(shortlisted), batch_size):
@@ -570,11 +593,13 @@ def rank_resumes_for_jd(jd_pdf_path, resumes, jd_data):
         print("\n🎯 FINAL RANKING:")
         for idx, r in enumerate(final_ranked, 1):
             name = r.get("personal_details", {}).get("name", "Unknown")
-            print(f" {idx}. {name[:20]:20} → Score: {r['final_score']:.4f}")
+            highlights = ", ".join(r.get('highlights', []))
+            print(f" {idx}. {name[:20]:20} → Score: {r['final_score']:.4f} | {highlights}")
         
         elapsed = time.time() - start_time
         print(f"\n⏱️  Processed {len(resumes)} resumes in {elapsed:.2f} seconds")
         print(f"  - Stage 1: {len(resumes)} resumes")
         print(f"  - Stage 2: {len(shortlisted)} resumes")
+        print(f"  - Device: {device}, Batch size: {batch_size}")
 
     return final_ranked
